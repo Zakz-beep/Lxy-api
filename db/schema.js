@@ -1,6 +1,7 @@
 import { Sequelize, DataTypes } from "sequelize";
 import { v4 as uuidv4 } from "uuid";
 
+
 // Inisialisasi koneksi Sequelize
 export const sequelize = new Sequelize("lyx_db", "root", "", {
   host: "localhost",

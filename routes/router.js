@@ -1,7 +1,12 @@
 import express from "express"
 import bcrypt from "bcrypt"
 import { Profile, Session, User } from "../db/schema.js"
+import { Like } from "../db/LikeSchema.js"
+import { Post } from "../db/Schema-2.js"
 import { isAuthenticated } from "../middlewares/auth.js"
+import path from 'path';
+import fs from "fs"
+import {upload,uploadDir} from "../middlewares/uploadMulter.js"
 
 const router = express.Router()
 
@@ -82,4 +87,167 @@ router.put("/api/profile",async(req,res)=>{
 router.get("/me",isAuthenticated,async(req,res)=>{
     return res.json(req.user)
 })
+// Gabungan route PUT /api/profile
+router.put("/api/profiles", upload.single("avatar"), async (req, res) => {
+  const { token } = req.headers;
+  const { gender, birthday, location, website, phone, bio } = req.body;
+
+  try {
+    const session = await Session.findByPk(token, { include: "user" });
+
+    if (!session || session.revoked) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const user = session.user;
+
+    // Ambil atau buat profil
+    const [profile, created] = await Profile.findOrCreate({
+      where: { userId: user.id },
+    });
+
+    // Update data profil
+    await profile.update({
+      gender,
+      birthday,
+      location,
+      website,
+      phone,
+    });
+
+    // Update bio
+    await user.update({ bio });
+
+    // Handle avatar upload
+    if (req.file) {
+      // Hapus avatar lama jika ada
+      if (user.avatarUrl) {
+        const oldFile = path.basename(user.avatarUrl);
+        const oldPath = path.join(uploadDir, oldFile);
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      }
+
+      // Simpan avatar baru
+      const avatarUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+      await user.update({ avatarUrl });
+    }
+
+    return res.json({
+      message: "Profile berhasil diupdate",
+      status: 200,
+      profile,
+      avatarUrl: user.avatarUrl || null,
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: err.message });
+  }
+});
+// POST /api/posts - buat postingan baru dengan gambar
+router.post("/api/posts", isAuthenticated, upload.single("image"), async (req, res) => {
+  const { title, content } = req.body;
+  const user = req.user;
+
+  if (!title || !content) {
+    return res.status(400).json({ message: "Title dan content wajib diisi" });
+  }
+
+  try {
+    let imageUrl = null;
+
+    if (req.file) {
+      // Buat URL akses file, misalnya http://localhost:3000/uploads/namafile.jpg
+      imageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    }
+
+    const newPost = await Post.create({
+      userId: user.id,
+      title,
+      content,
+      imageUrl,
+    });
+
+    res.status(201).json({ message: "Post berhasil dibuat", post: newPost });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.get("/api/posts", async (req, res) => {
+  try {
+    const posts = await Post.findAll({
+      include: {
+        model: User,
+        as: "author",
+        attributes: ["id", "name", "username", "avatarUrl"],
+      },
+      order: [["createdAt", "DESC"]],
+    });
+
+    res.json({ posts });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.post("/api/posts/:id/like", isAuthenticated, async (req, res) => {
+  const user = req.user;
+  const postId = req.params.id;
+
+  try {
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ message: "Post tidak ditemukan" });
+
+    const existingLike = await Like.findOne({
+      where: {
+        userId: user.id,
+        postId: post.id,
+      },
+    });
+
+    if (existingLike) {
+      return res.status(400).json({ message: "Kamu sudah like postingan ini" });
+    }
+
+    await Like.create({ userId: user.id, postId: post.id });
+
+    post.likes += 1;
+    await post.save();
+
+    res.json({ message: "Like berhasil ditambahkan", likes: post.likes });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.delete("/api/posts/:id/like", isAuthenticated, async (req, res) => {
+  const user = req.user;
+  const postId = req.params.id;
+
+  try {
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ message: "Post tidak ditemukan" });
+
+    const like = await Like.findOne({
+      where: {
+        userId: user.id,
+        postId: post.id,
+      },
+    });
+
+    if (!like) {
+      return res.status(400).json({ message: "Kamu belum like postingan ini" });
+    }
+
+    await like.destroy(); // hapus dari tabel likes
+
+    // Kurangi jumlah likes (jangan minus)
+    post.likes = Math.max(0, post.likes - 1);
+    await post.save();
+
+    res.json({ message: "Unlike berhasil", likes: post.likes });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 export default router
