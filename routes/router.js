@@ -54,7 +54,7 @@ router.post("/api/login",async(req,res)=>{
 })
 router.put("/api/profile",async(req,res)=>{
     const {token} = req.headers
-    const {gender,birthday,location,website,phone,bio,avatarUrl} = req.body
+    const {gender,birthday,location,website,phone,bio} = req.body
     try{
         const sessions = await Session.findByPk(token,{include:"user"})
         if(!sessions | sessions.revoked){
@@ -70,10 +70,10 @@ router.put("/api/profile",async(req,res)=>{
             website,
             phone
         })
-        await req.user.update({
-            bio,
-            avatarUrl
-        })
+        await sessions.user.update({
+  bio,
+})
+
         return res.json({message:"Profile berhasil diupdate",status:200,profile})
     }catch(err){
         return res.status(500).json({message:err.message})

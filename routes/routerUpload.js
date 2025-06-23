@@ -40,9 +40,21 @@ const upload = multer({
 // POST /api/upload/avatar
 routerUpload.post("/avatar", isAuthenticated, upload.single("avatar"), async (req, res) => {
   try {
-    const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
 
-    // Simpan ke user.avatarUrl
+    // Hapus file lama jika ada
+    if (req.user.avatarUrl) {
+      const oldFile = path.basename(req.user.avatarUrl);
+      const oldPath = path.join(uploadDir, oldFile);
+
+      if (fs.existsSync(oldPath)) {
+        fs.unlinkSync(oldPath);
+      }
+    }
+
+    const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
     await req.user.update({ avatarUrl: fileUrl });
 
     res.json({ message: "Avatar uploaded", avatarUrl: fileUrl });
