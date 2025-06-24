@@ -31,14 +31,15 @@ export const Like = sequelize.define("Like", {
 User.belongsToMany(Post, {
   through: Like,
   foreignKey: "userId",
-  as: "likedPosts",
+  as: "likedPosts", // user.likedPosts
 });
 
 Post.belongsToMany(User, {
   through: Like,
   foreignKey: "postId",
-  as: "likedBy",
+  as: "likedBy", // post.likedBy
 });
+Like.belongsTo(User, { foreignKey: "userId", as: "user" });
 
 async function initDB3() {
   try {

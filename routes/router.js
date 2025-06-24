@@ -175,7 +175,9 @@ router.post("/api/posts", isAuthenticated, upload.single("image"), async (req, r
     res.status(500).json({ message: err.message });
   }
 });
-router.get("/api/posts", async (req, res) => {
+router.get("/api/posts", isAuthenticated, async (req, res) => {
+  const user = req.user;
+
   try {
     const posts = await Post.findAll({
       include: {
@@ -186,7 +188,53 @@ router.get("/api/posts", async (req, res) => {
       order: [["createdAt", "DESC"]],
     });
 
-    res.json({ posts });
+    // Ambil semua postId yang sudah di-like oleh user
+    const likedPostIds = await Like.findAll({
+      where: { userId: user.id },
+      attributes: ["postId"],
+    }).then(likes => likes.map(like => like.postId));
+
+    // Tambahkan statusLiked ke setiap post
+    const enrichedPosts = posts.map(post => {
+      const isLiked = likedPostIds.includes(post.id);
+      return {
+        ...post.toJSON(),
+        statusLiked: isLiked,
+      };
+    });
+
+    res.json({ posts: enrichedPosts });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.get("/api/users/posts", isAuthenticated, async (req, res) => {
+  const user = req.user;
+
+  try {
+    // Ambil semua postingan milik user yang sedang login
+    const posts = await Post.findAll({
+      where: { userId: user.id },
+      include: {
+        model: User,
+        as: "author",
+        attributes: ["id", "name", "username", "avatarUrl"],
+      },
+      order: [["createdAt", "DESC"]],
+    });
+
+    // Cari apakah user like post miliknya sendiri
+    const likedPostIds = await Like.findAll({
+      where: { userId: user.id },
+      attributes: ["postId"],
+    }).then(likes => likes.map(like => like.postId));
+
+    const enrichedPosts = posts.map(post => ({
+      ...post.toJSON(),
+      statusLiked: likedPostIds.includes(post.id),
+    }));
+
+    res.json({ posts: enrichedPosts });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -207,7 +255,7 @@ router.post("/api/posts/:id/like", isAuthenticated, async (req, res) => {
     });
 
     if (existingLike) {
-      return res.status(400).json({ message: "Kamu sudah like postingan ini" });
+      return res.status(400).json({ message: "Kamu sudah like postingan ini",statusLiked:existingLike?true:false });
     }
 
     await Like.create({ userId: user.id, postId: post.id });
@@ -215,7 +263,7 @@ router.post("/api/posts/:id/like", isAuthenticated, async (req, res) => {
     post.likes += 1;
     await post.save();
 
-    res.json({ message: "Like berhasil ditambahkan", likes: post.likes });
+    res.json({ message: "Like berhasil ditambahkan", likes: post.likes,statusLiked:existingLike?true:false });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -246,6 +294,94 @@ router.delete("/api/posts/:id/like", isAuthenticated, async (req, res) => {
     await post.save();
 
     res.json({ message: "Unlike berhasil", likes: post.likes });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.get("/api/users/likes", isAuthenticated, async (req, res) => {
+  const user = req.user;
+
+  try {
+    const userWithLikes = await User.findByPk(user.id, {
+      include: {
+        model: Post,
+        as: "likedPosts",
+        include: {
+          model: User,
+          as: "author",
+          attributes: ["id", "name", "username", "avatarUrl"],
+        },
+      },
+    });
+
+    res.json({
+      userId: user.id,
+      likedPosts: userWithLikes.likedPosts,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.delete("/api/posts/:id", isAuthenticated, async (req, res) => {
+  const user = req.user;
+  const postId = req.params.id;
+
+  try {
+    const post = await Post.findByPk(postId);
+
+    if (!post) {
+      return res.status(404).json({ message: "Postingan tidak ditemukan" });
+    }
+
+    // Cek apakah post milik user yang login
+    if (post.userId !== user.id) {
+      return res.status(403).json({ message: "Kamu tidak memiliki akses untuk menghapus postingan ini" });
+    }
+
+    await post.destroy();
+
+    res.json({ message: "Postingan berhasil dihapus" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+router.put("/api/posts/:id", isAuthenticated, upload.single("image"), async (req, res) => {
+  const user = req.user;
+  const postId = req.params.id;
+  const { title, content } = req.body;
+
+  try {
+    const post = await Post.findByPk(postId);
+    if (!post) return res.status(404).json({ message: "Postingan tidak ditemukan" });
+
+    if (post.userId !== user.id) {
+      return res.status(403).json({ message: "Kamu tidak punya izin mengedit postingan ini" });
+    }
+
+    let newImageUrl = post.imageUrl;
+
+    // Jika upload gambar baru
+    if (req.file) {
+      // Hapus gambar lama jika ada
+      if (post.imageUrl) {
+        const oldFilename = path.basename(post.imageUrl);
+        const oldPath = path.join(uploadDir, oldFilename);
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      }
+
+      // Simpan URL gambar baru
+      newImageUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+    }
+
+    await post.update({
+      title: title || post.title,
+      content: content || post.content,
+      imageUrl: newImageUrl,
+    });
+
+    res.json({ message: "Postingan berhasil diperbarui", post });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
